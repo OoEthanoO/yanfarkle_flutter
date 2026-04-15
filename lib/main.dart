@@ -88,19 +88,15 @@ class _ContentViewState extends State<ContentView> {
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_chatScrollController.hasClients) {
-        _chatScrollController.animateTo(
-          0.0,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-        );
+        _chatScrollController.jumpTo(_chatScrollController.position.maxScrollExtent);
       }
     });
     // Double check after a short delay for keyboard or layout shifts
-    Future.delayed(const Duration(milliseconds: 100), () {
+    Future.delayed(const Duration(milliseconds: 50), () {
       if (mounted && _chatScrollController.hasClients) {
         _chatScrollController.animateTo(
-          0.0,
-          duration: const Duration(milliseconds: 100),
+          _chatScrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 200),
           curve: Curves.easeOut,
         );
       }
@@ -485,7 +481,7 @@ class _ContentViewState extends State<ContentView> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           if (game.winner != null)
-            Text("${game.playerName(game.winner!)} Wins!", style: const TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.white))
+            Text(game.playerName(game.winner!) == "You" ? "You Win!" : "${game.playerName(game.winner!)} Wins!", style: const TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.white))
           else
             const Text("Someone Wins!", style: TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.white)),
           const SizedBox(height: 30),
@@ -533,91 +529,100 @@ class _ContentViewState extends State<ContentView> {
     return Column(
       children: [
         Expanded(
-          child: SingleChildScrollView(
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 10),
-                  child: Row(
-                    children: [
-                      ElevatedButton(
-                        onPressed: () {
-                          networkManager.stop();
-                          setState(() => isStarted = false);
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.red,
-                          foregroundColor: Colors.white,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return SingleChildScrollView(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                  child: IntrinsicHeight(
+                    child: Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 10),
+                          child: Row(
+                            children: [
+                              ElevatedButton(
+                                onPressed: () {
+                                  networkManager.stop();
+                                  setState(() => isStarted = false);
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.red,
+                                  foregroundColor: Colors.white,
+                                ),
+                                child: const Text("Leave"),
+                              ),
+                              const Spacer(),
+                              if (game.isNetworkGame)
+                                IconButton(
+                                  icon: const Icon(Icons.message, color: Colors.white),
+                                  onPressed: () {
+                                    setState(() => showChat = true);
+                                    _scrollToBottom();
+                                  },
+                                ),
+                              Container(
+                                margin: const EdgeInsets.only(left: 8),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.2),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: IconButton(
+                                  icon: const Icon(Icons.question_mark_rounded, color: Colors.white70, size: 20),
+                                  onPressed: () => setState(() => showRules = true),
+                                  constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                                  padding: EdgeInsets.zero,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                        child: const Text("Leave"),
-                      ),
-                      const Spacer(),
-                      if (game.isNetworkGame)
-                        IconButton(
-                          icon: const Icon(Icons.message, color: Colors.white),
-                          onPressed: () {
-                            setState(() => showChat = true);
-                            _scrollToBottom();
-                          },
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              _scoreCard(game, game.isNetworkGame || game.isBotGame ? game.myPlayer : Player.p1),
+                              _scoreCard(game, game.isNetworkGame || game.isBotGame ? game.myPlayer.next : Player.p2),
+                            ],
+                          ),
                         ),
-                      Container(
-                        margin: const EdgeInsets.only(left: 8),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.2),
-                          shape: BoxShape.circle,
-                        ),
-                        child: IconButton(
-                          icon: const Icon(Icons.question_mark_rounded, color: Colors.white70, size: 20),
-                          onPressed: () => setState(() => showRules = true),
-                          constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-                          padding: EdgeInsets.zero,
-                        ),
-                      ),
-                    ],
+                        if (!isWaiting && hasReceivedInitialState) ...[
+                          Text(
+                            game.isNetworkGame ? (game.isLocalTurn ? "Your Turn" : "Opponent's Turn") : "${game.playerName(game.currentPlayer)}'s Turn",
+                            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
+                          ),
+                          Text("Goal: ${game.winPoints}", style: const TextStyle(color: Colors.white70)),
+                          Text("Turn Score: ${game.turnScore}", style: const TextStyle(fontSize: 20, color: Colors.yellow)),
+                        ],
+                        const Spacer(),
+                        if (isWaiting) ...[
+                          const CircularProgressIndicator(color: Colors.white),
+                          const SizedBox(height: 10),
+                          if (networkManager.isHosting)
+                            Text("Hosting at ${networkManager.hostIPAddress ?? '...'}\nWaiting for opponent...", style: const TextStyle(color: Colors.white, fontSize: 20), textAlign: TextAlign.center)
+                          else
+                            const Text("Waiting for opponent...", style: TextStyle(color: Colors.white, fontSize: 20)),
+                        ] else if (game.isNetworkGame && !hasReceivedInitialState) ...[
+                          const CircularProgressIndicator(color: Colors.white),
+                          const SizedBox(height: 10),
+                          const Text("Text Waiting for host...", style: TextStyle(color: Colors.white, fontSize: 20)),
+                        ] else ...[
+                          SizedBox(
+                            height: 60,
+                            child: game.state == GameState.bust
+                                ? const Text("BUST!", style: TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.red))
+                                : const SizedBox.shrink(),
+                          ),
+                          _buildDiceArea(game, networkManager),
+                        ],
+                        const Spacer(),
+                      ],
+                    ),
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      _scoreCard(game, game.isNetworkGame || game.isBotGame ? game.myPlayer : Player.p1),
-                      _scoreCard(game, game.isNetworkGame || game.isBotGame ? game.myPlayer.next : Player.p2),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 20),
-                if (!isWaiting && hasReceivedInitialState) ...[
-                  Text(
-                    game.isNetworkGame ? (game.isLocalTurn ? "Your Turn" : "Opponent's Turn") : "${game.playerName(game.currentPlayer)}'s Turn",
-                    style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
-                  ),
-                  Text("Goal: ${game.winPoints}", style: const TextStyle(color: Colors.white70)),
-                  Text("Turn Score: ${game.turnScore}", style: const TextStyle(fontSize: 20, color: Colors.yellow)),
-                ],
-                const SizedBox(height: 20),
-                if (isWaiting) ...[
-                  const CircularProgressIndicator(color: Colors.white),
-                  const SizedBox(height: 10),
-                  if (networkManager.isHosting)
-                    Text("Hosting at ${networkManager.hostIPAddress ?? '...'}\nWaiting for opponent...", style: const TextStyle(color: Colors.white, fontSize: 20), textAlign: TextAlign.center)
-                  else
-                    const Text("Waiting for opponent...", style: TextStyle(color: Colors.white, fontSize: 20)),
-                ] else if (game.isNetworkGame && !hasReceivedInitialState) ...[
-                  const CircularProgressIndicator(color: Colors.white),
-                  const SizedBox(height: 10),
-                  const Text("Waiting for host...", style: TextStyle(color: Colors.white, fontSize: 20)),
-                ] else ...[
-                  SizedBox(
-                    height: 60,
-                    child: game.state == GameState.bust
-                        ? const Text("BUST!", style: TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.red))
-                        : const SizedBox.shrink(),
-                  ),
-                  _buildDiceArea(game, networkManager),
-                ],
-              ],
-            ),
+              );
+            },
           ),
         ),
         SafeArea(
@@ -745,10 +750,9 @@ class _ContentViewState extends State<ContentView> {
           Expanded(
             child: ListView.builder(
               controller: _chatScrollController,
-              reverse: true,
               itemCount: game.chatMessages.length,
               itemBuilder: (context, index) {
-                final msg = game.chatMessages[game.chatMessages.length - 1 - index];
+                final msg = game.chatMessages[index];
                 return Align(
                   alignment: msg.isMe ? Alignment.centerRight : Alignment.centerLeft,
                   child: Container(

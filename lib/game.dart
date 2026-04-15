@@ -224,7 +224,7 @@ class Game extends ChangeNotifier {
         scoreAndEndTurn();
       } else if (remainingCount == 0) {
         scoreAndContinue();
-      } else if (totalPotential > 300 || remainingCount <= 2) {
+      } else if (totalPotential >= 500 || (remainingCount <= 2 && totalPotential >= 300)) {
         scoreAndEndTurn();
       } else {
         scoreAndContinue();
