@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
@@ -49,6 +50,12 @@ class _ContentViewState extends State<ContentView> {
   bool hasReceivedInitialState = false;
   bool showRules = false;
   bool showChat = false;
+  String? _incomingMessage;
+  Timer? _messageTimer;
+  String? _p1Emote;
+  String? _p2Emote;
+  Timer? _p1EmoteTimer;
+  Timer? _p2EmoteTimer;
 
   final TextEditingController _hostIPController = TextEditingController(text: "127.0.0.1");
   final TextEditingController _chatController = TextEditingController();
@@ -103,6 +110,22 @@ class _ContentViewState extends State<ContentView> {
     });
   }
 
+  void _showEmote(Player player, String emote) {
+    if (player == Player.p1) {
+      _p1EmoteTimer?.cancel();
+      setState(() => _p1Emote = emote);
+      _p1EmoteTimer = Timer(const Duration(seconds: 3), () {
+        if (mounted) setState(() => _p1Emote = null);
+      });
+    } else {
+      _p2EmoteTimer?.cancel();
+      setState(() => _p2Emote = emote);
+      _p2EmoteTimer = Timer(const Duration(seconds: 3), () {
+        if (mounted) setState(() => _p2Emote = null);
+      });
+    }
+  }
+
   void _setupNetworkCallbacks(Game game, NetworkManager networkManager) {
     networkManager.onStateReceived = (state) {
       setState(() {
@@ -112,15 +135,37 @@ class _ContentViewState extends State<ContentView> {
     };
 
     networkManager.onChatReceived = (message) {
+      if (!mounted) return;
       setState(() {
         game.chatMessages.add(ChatMessage(text: message, isMe: false));
-        showChat = true;
       });
-      // Delay slightly to allow the 'showChat = true' UI transition to begin
-      Future.delayed(const Duration(milliseconds: 50), () => _scrollToBottom());
+      if (showChat) {
+        _scrollToBottom();
+      } else {
+        _messageTimer?.cancel();
+        setState(() {
+          _incomingMessage = message;
+        });
+        _messageTimer = Timer(const Duration(seconds: 3), () {
+          if (mounted) {
+            setState(() {
+              _incomingMessage = null;
+            });
+          }
+        });
+      }
     };
 
     networkManager.onActionReceived = (action, value) {
+      if (action == GameAction.emote) {
+        final emotes = ["😀", "😂", "😎", "🤔", "😮", "😢", "😡", "👍", "👎", "🔥", "🎲", "🎯"];
+        if (value >= 0 && value < emotes.length) {
+          Player sender = game.myPlayer.next; // If it's a network game, it's from the other player
+          _showEmote(sender, emotes[value]);
+        }
+        return;
+      }
+
       if (action == GameAction.readyUp) {
         Player sender = PlayerExtension.fromRawValue(value);
         if (sender == Player.p1) {
@@ -253,13 +298,15 @@ class _ContentViewState extends State<ContentView> {
       },
       child: GestureDetector(
         onTap: () {
-          if (!_focusNode.hasFocus) {
-            _focusNode.requestFocus();
-          }
+          // Unfocus any text fields and regain game focus
+          FocusManager.instance.primaryFocus?.unfocus();
+          _focusNode.requestFocus();
         },
         behavior: HitTestBehavior.opaque,
         child: Scaffold(
           body: Container(
+            width: double.infinity,
+            height: double.infinity,
             decoration: const BoxDecoration(
               gradient: LinearGradient(
                 colors: [Color(0xFF196633), Color(0xFF0D331A)],
@@ -269,9 +316,7 @@ class _ContentViewState extends State<ContentView> {
             ),
             child: Stack(
               children: [
-                SafeArea(
-                  child: _buildBody(game, networkManager),
-                ),
+                Positioned.fill(child: _buildBody(game, networkManager)),
                 if (showRules)
                   Positioned.fill(
                     child: RulesView(onDismiss: () => setState(() => showRules = false)),
@@ -293,6 +338,7 @@ class _ContentViewState extends State<ContentView> {
       return _buildGameOver(game, networkManager);
     } else {
       return Stack(
+        fit: StackFit.expand,
         children: [
           _buildGame(game, networkManager),
           if (showChat)
@@ -308,111 +354,122 @@ class _ContentViewState extends State<ContentView> {
   }
 
   Widget _buildMainMenu(Game game, NetworkManager networkManager) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Text(
-            "YanFarkle",
-            style: TextStyle(fontSize: 64, fontWeight: FontWeight.bold, color: Colors.white),
-          ),
-          const SizedBox(height: 40),
-          _menuButton("1 Player (Vs Bot)", Colors.orange, () {
-            game.start();
-            hasReceivedInitialState = true;
-            game.isNetworkGame = false;
-            game.isBotGame = true;
-            setState(() {
-              isStarted = true;
-              isConfiguring = true;
-            });
-          }),
-          const SizedBox(height: 15),
-          _menuButton("2 Players (Local)", Colors.white, () {
-            game.start();
-            hasReceivedInitialState = true;
-            game.isNetworkGame = false;
-            game.isBotGame = false;
-            setState(() {
-              isStarted = true;
-              isConfiguring = true;
-            });
-          }, textColor: const Color(0xFF196633)),
-          if (!kIsWeb) ...[
-            const SizedBox(height: 15),
-            _menuButton("Host LAN Game", Colors.blue, () {
-              game.start();
-              hasReceivedInitialState = true;
-              game.isNetworkGame = true;
-              game.isBotGame = false;
-              game.myPlayer = Player.p1;
-              networkManager.host();
-              _setupNetworkCallbacks(game, networkManager);
-              setState(() {
-                isStarted = true;
-              });
-            }),
-            const SizedBox(height: 20),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SizedBox(
-                  width: 150,
-                  child: TextField(
-                    controller: _hostIPController,
-                    decoration: const InputDecoration(
-                      fillColor: Colors.white,
-                      filled: true,
-                      hintText: "Host IP",
-                      border: OutlineInputBorder(),
-                    ),
-                    style: const TextStyle(color: Colors.black),
+    return SafeArea(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return SingleChildScrollView(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                  const Text(
+                    "YanFarkle",
+                    style: TextStyle(fontSize: 64, fontWeight: FontWeight.bold, color: Colors.white),
                   ),
-                ),
-                const SizedBox(width: 10),
-                ElevatedButton(
-                  onPressed: networkManager.isConnecting ? null : () {
+                  const SizedBox(height: 40),
+                  _menuButton("1 Player (Vs Bot)", Colors.orange, () {
                     game.start();
-                    hasReceivedInitialState = false;
-                    game.isNetworkGame = true;
+                    hasReceivedInitialState = true;
+                    game.isNetworkGame = false;
+                    game.isBotGame = true;
+                    setState(() {
+                      isStarted = true;
+                      isConfiguring = true;
+                    });
+                  }),
+                  const SizedBox(height: 15),
+                  _menuButton("2 Players (Local)", Colors.white, () {
+                    game.start();
+                    hasReceivedInitialState = true;
+                    game.isNetworkGame = false;
                     game.isBotGame = false;
-                    game.myPlayer = Player.p2;
-                    networkManager.connect(host: _hostIPController.text);
-                    _setupNetworkCallbacks(game, networkManager);
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.orange,
-                    foregroundColor: Colors.white,
+                    setState(() {
+                      isStarted = true;
+                      isConfiguring = true;
+                    });
+                  }, textColor: const Color(0xFF196633)),
+                  if (!kIsWeb) ...[
+                    const SizedBox(height: 15),
+                    _menuButton("Host LAN Game", Colors.blue, () {
+                      game.start();
+                      hasReceivedInitialState = true;
+                      game.isNetworkGame = true;
+                      game.isBotGame = false;
+                      game.myPlayer = Player.p1;
+                      networkManager.host();
+                      _setupNetworkCallbacks(game, networkManager);
+                      setState(() {
+                        isStarted = true;
+                      });
+                    }),
+                    const SizedBox(height: 20),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 150,
+                          child: TextField(
+                            controller: _hostIPController,
+                            decoration: const InputDecoration(
+                              fillColor: Colors.white,
+                              filled: true,
+                              hintText: "Host IP",
+                              border: OutlineInputBorder(),
+                            ),
+                            style: const TextStyle(color: Colors.black),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        ElevatedButton(
+                          onPressed: networkManager.isConnecting ? null : () {
+                            game.start();
+                            hasReceivedInitialState = false;
+                            game.isNetworkGame = true;
+                            game.isBotGame = false;
+                            game.myPlayer = Player.p2;
+                            networkManager.connect(host: _hostIPController.text);
+                            _setupNetworkCallbacks(game, networkManager);
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.orange,
+                            foregroundColor: Colors.white,
+                          ),
+                          child: networkManager.isConnecting
+                              ? const CircularProgressIndicator(color: Colors.white)
+                              : const Text("Join LAN"),
+                        ),
+                      ],
+                    ),
+                  ],
+                  if (networkManager.connectionError != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: Text(networkManager.connectionError!, style: const TextStyle(color: Colors.red)),
+                    ),
+                  const SizedBox(height: 20),
+                  OutlinedButton(
+                    onPressed: () => setState(() => showRules = true),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
+                      backgroundColor: Colors.white.withValues(alpha: 0.2),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                      minimumSize: const Size(250, 0),
+                    ),
+                    child: const Text("How to Play", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                   ),
-                  child: networkManager.isConnecting
-                      ? const CircularProgressIndicator(color: Colors.white)
-                      : const Text("Join LAN"),
-                ),
-              ],
+                ],
+              ),
             ),
-          ],
-          if (networkManager.connectionError != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 10),
-              child: Text(networkManager.connectionError!, style: const TextStyle(color: Colors.red)),
-            ),
-          const SizedBox(height: 20),
-          OutlinedButton(
-            onPressed: () => setState(() => showRules = true),
-            style: OutlinedButton.styleFrom(
-              side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
-              backgroundColor: Colors.white.withValues(alpha: 0.2),
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 12),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-              minimumSize: const Size(250, 0),
-            ),
-            child: const Text("How to Play", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           ),
-        ],
-      ),
-    );
-  }
+        );
+      },
+    ),
+  );
+}
 
   Widget _menuButton(String text, Color color, VoidCallback onPressed, {Color textColor = Colors.white}) {
     return ElevatedButton(
@@ -429,268 +486,445 @@ class _ContentViewState extends State<ContentView> {
   }
 
   Widget _buildConfigMenu(Game game, NetworkManager networkManager) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Text("Game Setup", style: TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.white)),
-          const SizedBox(height: 20),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Text("Goal: ", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
-              IconButton(
-                icon: const Icon(Icons.remove_circle, color: Colors.white),
-                onPressed: () {
-                  if (game.winPoints > 1000) setState(() => game.winPoints -= 1000);
-                },
+    return SafeArea(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return SingleChildScrollView(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                  const Text("Game Setup", style: TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.white)),
+                  const SizedBox(height: 20),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Text("Goal: ", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
+                      IconButton(
+                        icon: const Icon(Icons.remove_circle, color: Colors.white),
+                        onPressed: () {
+                          if (game.winPoints > 1000) setState(() => game.winPoints -= 1000);
+                        },
+                      ),
+                      Text("${game.winPoints}", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.yellow)),
+                      IconButton(
+                        icon: const Icon(Icons.add_circle, color: Colors.white),
+                        onPressed: () {
+                          if (game.winPoints < 10000) setState(() => game.winPoints += 1000);
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 40),
+                  _menuButton("Start Game", Colors.white, () {
+                    game.start();
+                    setState(() => isConfiguring = false);
+                    if (game.isNetworkGame) {
+                      Future.delayed(const Duration(milliseconds: 500), () => game.syncState());
+                    }
+                  }, textColor: const Color(0xFF196633)),
+                  const SizedBox(height: 15),
+                  _menuButton("Cancel", Colors.red, () {
+                    networkManager.stop();
+                    setState(() {
+                      isStarted = false;
+                      isConfiguring = false;
+                    });
+                  }),
+                ],
               ),
-              Text("${game.winPoints}", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.yellow)),
-              IconButton(
-                icon: const Icon(Icons.add_circle, color: Colors.white),
-                onPressed: () {
-                  if (game.winPoints < 10000) setState(() => game.winPoints += 1000);
-                },
-              ),
-            ],
+            ),
           ),
-          const SizedBox(height: 40),
-          _menuButton("Start Game", Colors.white, () {
-            game.start();
-            setState(() => isConfiguring = false);
-            if (game.isNetworkGame) {
-              Future.delayed(const Duration(milliseconds: 500), () => game.syncState());
-            }
-          }, textColor: const Color(0xFF196633)),
-          const SizedBox(height: 15),
-          _menuButton("Cancel", Colors.red, () {
-            networkManager.stop();
-            setState(() {
-              isStarted = false;
-              isConfiguring = false;
-            });
-          }),
-        ],
-      ),
-    );
-  }
+        );
+      },
+    ),
+  );
+}
 
   Widget _buildGameOver(Game game, NetworkManager networkManager) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          if (game.winner != null)
-            Text(game.playerName(game.winner!) == "You" ? "You Win!" : "${game.playerName(game.winner!)} Wins!", style: const TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.white))
-          else
-            const Text("Someone Wins!", style: TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.white)),
-          const SizedBox(height: 30),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Column(
-                children: [
-                  Text(game.playerName(game.isNetworkGame || game.isBotGame ? game.myPlayer : Player.p1), style: const TextStyle(fontSize: 20, color: Colors.white)),
-                  Text("${game.getScore(game.isNetworkGame || game.isBotGame ? game.myPlayer : Player.p1)}", style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white)),
+    return SafeArea(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return SingleChildScrollView(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                  if (game.winner != null)
+                    Text(game.playerName(game.winner!) == "You" ? "You Win!" : "${game.playerName(game.winner!)} Wins!", style: const TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.white))
+                  else
+                    const Text("Someone Wins!", style: TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.white)),
+                  const SizedBox(height: 30),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Column(
+                        children: [
+                          Text(game.playerName(game.isNetworkGame || game.isBotGame ? game.myPlayer : Player.p1), style: const TextStyle(fontSize: 20, color: Colors.white)),
+                          Text("${game.getScore(game.isNetworkGame || game.isBotGame ? game.myPlayer : Player.p1)}", style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white)),
+                        ],
+                      ),
+                      const SizedBox(width: 40),
+                      Column(
+                        children: [
+                          Text(game.playerName(game.isNetworkGame || game.isBotGame ? game.myPlayer.next : Player.p2), style: const TextStyle(fontSize: 20, color: Colors.white)),
+                          Text("${game.getScore(game.isNetworkGame || game.isBotGame ? game.myPlayer.next : Player.p2)}", style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white)),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 40),
+                  if (!game.isNetworkGame)
+                    _menuButton("Play Again", Colors.white, () {
+                      game.start();
+                    }, textColor: const Color(0xFF196633)),
+                  const SizedBox(height: 15),
+                  _menuButton("Exit to Menu", Colors.red, () {
+                    networkManager.stop();
+                    setState(() {
+                      isStarted = false;
+                      isConfiguring = false;
+                    });
+                  }),
                 ],
               ),
-              const SizedBox(width: 40),
-              Column(
-                children: [
-                  Text(game.playerName(game.isNetworkGame || game.isBotGame ? game.myPlayer.next : Player.p2), style: const TextStyle(fontSize: 20, color: Colors.white)),
-                  Text("${game.getScore(game.isNetworkGame || game.isBotGame ? game.myPlayer.next : Player.p2)}", style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white)),
-                ],
-              ),
-            ],
+            ),
           ),
-          const SizedBox(height: 40),
-          if (!game.isNetworkGame)
-            _menuButton("Play Again", Colors.white, () {
-              game.start();
-            }, textColor: const Color(0xFF196633)),
-          const SizedBox(height: 15),
-          _menuButton("Exit to Menu", Colors.red, () {
-            networkManager.stop();
-            setState(() {
-              isStarted = false;
-              isConfiguring = false;
-            });
-          }),
-        ],
-      ),
-    );
-  }
+        );
+      },
+    ),
+  );
+}
 
   Widget _buildGame(Game game, NetworkManager networkManager) {
     bool isWaiting = game.isNetworkGame && !networkManager.isConnected;
     bool actionEnabled = game.isLocalTurn && !isWaiting && hasReceivedInitialState;
     int potentialScore = game.calculateSelectedScore();
 
-    return Column(
+    return Stack(
       children: [
-        Expanded(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              return SingleChildScrollView(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                  child: IntrinsicHeight(
-                    child: Column(
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 10),
-                          child: Row(
+        Column(
+          children: [
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  return SingleChildScrollView(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                      child: IntrinsicHeight(
+                        child: SafeArea(
+                          bottom: false,
+                          child: Column(
                             children: [
-                              ElevatedButton(
-                                onPressed: () {
-                                  networkManager.stop();
-                                  setState(() => isStarted = false);
-                                },
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.red,
-                                  foregroundColor: Colors.white,
-                                ),
-                                child: const Text("Leave"),
+                              Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 10),
+                              child: Row(
+                                children: [
+                                  ElevatedButton(
+                                    onPressed: () {
+                                      networkManager.stop();
+                                      setState(() => isStarted = false);
+                                    },
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.red,
+                                      foregroundColor: Colors.white,
+                                    ),
+                                    child: const Text("Leave"),
+                                  ),
+                                  const Spacer(),
+                                  if (game.isNetworkGame) ...[
+                                    Container(
+                                      margin: const EdgeInsets.only(left: 8),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black.withValues(alpha: 0.2),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: IconButton(
+                                        icon: const Icon(Icons.message, color: Colors.white70, size: 20),
+                                        onPressed: () {
+                                          setState(() => showChat = true);
+                                          _scrollToBottom();
+                                        },
+                                        constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                                        padding: EdgeInsets.zero,
+                                      ),
+                                    ),
+                                    Container(
+                                      margin: const EdgeInsets.only(left: 8),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black.withValues(alpha: 0.2),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: IconButton(
+                                        icon: const Icon(Icons.emoji_emotions, color: Colors.white70, size: 20),
+                                        onPressed: () => _showEmotePicker(game, networkManager),
+                                        constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                                        padding: EdgeInsets.zero,
+                                      ),
+                                    ),
+                                  ],
+                                  Container(
+                                    margin: const EdgeInsets.only(left: 8),
+                                    decoration: BoxDecoration(
+                                      color: Colors.black.withValues(alpha: 0.2),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: IconButton(
+                                      icon: const Icon(Icons.question_mark_rounded, color: Colors.white70, size: 20),
+                                      onPressed: () => setState(() => showRules = true),
+                                      constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                                      padding: EdgeInsets.zero,
+                                    ),
+                                  ),
+                                ],
                               ),
-                              const Spacer(),
-                              if (game.isNetworkGame)
-                                IconButton(
-                                  icon: const Icon(Icons.message, color: Colors.white),
-                                  onPressed: () {
-                                    setState(() => showChat = true);
-                                    _scrollToBottom();
-                                  },
-                                ),
-                              Container(
-                                margin: const EdgeInsets.only(left: 8),
-                                decoration: BoxDecoration(
-                                  color: Colors.black.withValues(alpha: 0.2),
-                                  shape: BoxShape.circle,
-                                ),
-                                child: IconButton(
-                                  icon: const Icon(Icons.question_mark_rounded, color: Colors.white70, size: 20),
-                                  onPressed: () => setState(() => showRules = true),
-                                  constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-                                  padding: EdgeInsets.zero,
-                                ),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  _scoreCard(game, game.isNetworkGame || game.isBotGame ? game.myPlayer : Player.p1),
+                                  _scoreCard(game, game.isNetworkGame || game.isBotGame ? game.myPlayer.next : Player.p2),
+                                ],
                               ),
+                            ),
+                            if (!isWaiting && hasReceivedInitialState) ...[
+                              Text(
+                                game.isNetworkGame ? (game.isLocalTurn ? "Your Turn" : "Opponent's Turn") : "${game.playerName(game.currentPlayer)}'s Turn",
+                                style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
+                              ),
+                              Text("Goal: ${game.winPoints}", style: const TextStyle(color: Colors.white70)),
+                              Text("Turn Score: ${game.turnScore}", style: const TextStyle(fontSize: 20, color: Colors.yellow)),
                             ],
-                          ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              _scoreCard(game, game.isNetworkGame || game.isBotGame ? game.myPlayer : Player.p1),
-                              _scoreCard(game, game.isNetworkGame || game.isBotGame ? game.myPlayer.next : Player.p2),
+                            const Spacer(),
+                            if (isWaiting) ...[
+                              const CircularProgressIndicator(color: Colors.white),
+                              const SizedBox(height: 10),
+                              if (networkManager.isHosting)
+                                Text("Hosting at ${networkManager.hostIPAddress ?? '...'}\nWaiting for opponent...", style: const TextStyle(color: Colors.white, fontSize: 20), textAlign: TextAlign.center)
+                              else
+                                const Text("Waiting for opponent...", style: TextStyle(color: Colors.white, fontSize: 20)),
+                            ] else if (game.isNetworkGame && !hasReceivedInitialState) ...[
+                              const CircularProgressIndicator(color: Colors.white),
+                              const SizedBox(height: 10),
+                              const Text("Waiting for host...", style: TextStyle(color: Colors.white, fontSize: 20)),
+                            ] else ...[
+                              SizedBox(
+                                height: 60,
+                                child: game.state == GameState.bust
+                                    ? const Text("BUST!", style: TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.red))
+                                    : const SizedBox.shrink(),
+                              ),
+                              _buildDiceArea(game, networkManager),
                             ],
-                          ),
+                            const Spacer(),
+                          ],
                         ),
-                        if (!isWaiting && hasReceivedInitialState) ...[
-                          Text(
-                            game.isNetworkGame ? (game.isLocalTurn ? "Your Turn" : "Opponent's Turn") : "${game.playerName(game.currentPlayer)}'s Turn",
-                            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
-                          ),
-                          Text("Goal: ${game.winPoints}", style: const TextStyle(color: Colors.white70)),
-                          Text("Turn Score: ${game.turnScore}", style: const TextStyle(fontSize: 20, color: Colors.yellow)),
-                        ],
-                        const Spacer(),
-                        if (isWaiting) ...[
-                          const CircularProgressIndicator(color: Colors.white),
-                          const SizedBox(height: 10),
-                          if (networkManager.isHosting)
-                            Text("Hosting at ${networkManager.hostIPAddress ?? '...'}\nWaiting for opponent...", style: const TextStyle(color: Colors.white, fontSize: 20), textAlign: TextAlign.center)
-                          else
-                            const Text("Waiting for opponent...", style: TextStyle(color: Colors.white, fontSize: 20)),
-                        ] else if (game.isNetworkGame && !hasReceivedInitialState) ...[
-                          const CircularProgressIndicator(color: Colors.white),
-                          const SizedBox(height: 10),
-                          const Text("Text Waiting for host...", style: TextStyle(color: Colors.white, fontSize: 20)),
-                        ] else ...[
-                          SizedBox(
-                            height: 60,
-                            child: game.state == GameState.bust
-                                ? const Text("BUST!", style: TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.red))
-                                : const SizedBox.shrink(),
-                          ),
-                          _buildDiceArea(game, networkManager),
-                        ],
-                        const Spacer(),
-                      ],
+                      ),
                     ),
                   ),
-                ),
-              );
+                );
+              },
+            ),
+          ),
+            SafeArea(
+              top: false,
+              child: Column(
+                children: [
+                  if (!isWaiting && hasReceivedInitialState)
+                    Text("Selected Score: $potentialScore", style: TextStyle(fontSize: 18, color: potentialScore > 0 ? Colors.greenAccent : Colors.white)),
+                  const SizedBox(height: 10),
+                  if (game.state != GameState.bust)
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        ElevatedButton(
+                          onPressed: (potentialScore == 0 || !actionEnabled) ? null : () {
+                            if (game.isLocalAuthority) {
+                              game.scoreAndContinue();
+                              game.syncState();
+                            } else {
+                              networkManager.sendAction(GameAction.continueRoll);
+                            }
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blue,
+                            foregroundColor: Colors.white,
+                          ),
+                          child: Text(_isKeyboardActive ? "Score & Roll (F)" : "Score & Roll"),
+                        ),
+                        const SizedBox(width: 20),
+                        ElevatedButton(
+                          onPressed: (potentialScore == 0 || !actionEnabled) ? null : () {
+                            if (game.isLocalAuthority) {
+                              game.scoreAndEndTurn();
+                              game.syncState();
+                            } else {
+                              networkManager.sendAction(GameAction.endTurn);
+                            }
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.orange,
+                            foregroundColor: Colors.white,
+                          ),
+                          child: Text(_isKeyboardActive ? "Score & End (Q)" : "Score & End"),
+                        ),
+                      ],
+                    ),
+                  const SizedBox(height: 20),
+                ],
+              ),
+            ),
+          ],
+        ),
+        if (_incomingMessage != null)
+          Positioned(
+            top: 60,
+            left: 20,
+            right: 20,
+            child: TweenAnimationBuilder<double>(
+              duration: const Duration(milliseconds: 300),
+              tween: Tween(begin: 0.0, end: 1.0),
+              builder: (context, value, child) {
+                return Opacity(
+                  opacity: value,
+                  child: Transform.translate(
+                    offset: Offset(0, (1 - value) * -20),
+                    child: child,
+                  ),
+                );
+              },
+          child: GestureDetector(
+            onTap: () {
+              setState(() {
+                showChat = true;
+                _incomingMessage = null;
+              });
+              _scrollToBottom();
             },
-          ),
-        ),
-        SafeArea(
-          top: false,
-          child: Column(
-            children: [
-              if (!isWaiting && hasReceivedInitialState)
-                Text("Selected Score: $potentialScore", style: TextStyle(fontSize: 18, color: potentialScore > 0 ? Colors.greenAccent : Colors.white)),
-              const SizedBox(height: 10),
-              if (game.state != GameState.bust)
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    ElevatedButton(
-                      onPressed: (potentialScore == 0 || !actionEnabled) ? null : () {
-                        if (game.isLocalAuthority) {
-                          game.scoreAndContinue();
-                          game.syncState();
-                        } else {
-                          networkManager.sendAction(GameAction.continueRoll);
-                        }
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blue,
-                        foregroundColor: Colors.white,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.withValues(alpha: 0.9),
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.3),
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
                       ),
-                      child: Text(_isKeyboardActive ? "Score & Roll (F)" : "Score & Roll"),
-                    ),
-                    const SizedBox(width: 20),
-                    ElevatedButton(
-                      onPressed: (potentialScore == 0 || !actionEnabled) ? null : () {
-                        if (game.isLocalAuthority) {
-                          game.scoreAndEndTurn();
-                          game.syncState();
-                        } else {
-                          networkManager.sendAction(GameAction.endTurn);
-                        }
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.orange,
-                        foregroundColor: Colors.white,
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.chat_bubble, color: Colors.white, size: 20),
+                      const SizedBox(width: 10),
+                      Flexible(
+                        child: Text(
+                          _incomingMessage!,
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
-                      child: Text(_isKeyboardActive ? "Score & End (Q)" : "Score & End"),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              const SizedBox(height: 20),
-            ],
+              ],
+            ),
           ),
-        ),
+            ),
+          ),
       ],
     );
   }
 
   Widget _scoreCard(Game game, Player player) {
     bool isHighlighted = game.currentPlayer == player && game.state != GameState.gameOver;
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: isHighlighted ? Colors.white.withValues(alpha: 0.3) : Colors.black.withValues(alpha: 0.3),
-        borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: isHighlighted ? Colors.yellow : Colors.transparent, width: 2),
-      ),
-      child: Column(
-        children: [
-          Text(game.playerName(player), style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
-          Text("${game.getScore(player)}", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
-        ],
+    String emote = (player == Player.p1) ? (_p1Emote ?? "") : (_p2Emote ?? "");
+
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: isHighlighted ? Colors.white.withValues(alpha: 0.3) : Colors.black.withValues(alpha: 0.3),
+            borderRadius: BorderRadius.circular(15),
+            border: Border.all(color: isHighlighted ? Colors.yellow : Colors.transparent, width: 2),
+          ),
+          child: Column(
+            children: [
+              Text(game.playerName(player), style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+              Text("${game.getScore(player)}", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 40,
+          child: AnimatedOpacity(
+            opacity: emote.isEmpty ? 0 : 1,
+            duration: const Duration(milliseconds: 200),
+            child: Text(emote, style: const TextStyle(fontSize: 32)),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _showEmotePicker(Game game, NetworkManager networkManager) {
+    final emotes = ["😀", "😂", "😎", "🤔", "😮", "😢", "😡", "👍", "👎", "🔥", "🎲", "🎯"];
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0D331A),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          border: Border.all(color: Colors.white24),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text("Sent an Emote", style: TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            GridView.builder(
+              shrinkWrap: true,
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 4,
+                mainAxisSpacing: 10,
+                crossAxisSpacing: 10,
+              ),
+              itemCount: emotes.length,
+              itemBuilder: (context, index) {
+                return GestureDetector(
+                  onTap: () {
+                    _showEmote(game.myPlayer, emotes[index]);
+                    networkManager.sendAction(GameAction.emote, value: index);
+                    Navigator.pop(context);
+                  },
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(emotes[index], style: const TextStyle(fontSize: 32)),
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -736,55 +970,74 @@ class _ContentViewState extends State<ContentView> {
 
   Widget _buildChat(Game game, NetworkManager networkManager) {
     return Container(
-      color: Colors.black87,
+      decoration: const BoxDecoration(
+        color: Colors.black87,
+      ),
       height: 300,
-      child: Column(
-        children: [
-          Row(
-            children: [
-              const Padding(padding: EdgeInsets.all(8.0), child: Text("Chat", style: TextStyle(color: Colors.white, fontSize: 18))),
-              const Spacer(),
-              IconButton(icon: const Icon(Icons.close, color: Colors.white), onPressed: () => setState(() => showChat = false)),
-            ],
-          ),
-          Expanded(
-            child: ListView.builder(
-              controller: _chatScrollController,
-              itemCount: game.chatMessages.length,
-              itemBuilder: (context, index) {
-                final msg = game.chatMessages[index];
-                return Align(
-                  alignment: msg.isMe ? Alignment.centerRight : Alignment.centerLeft,
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: msg.isMe ? Colors.blue : Colors.grey,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Text(msg.text, style: const TextStyle(color: Colors.white)),
-                  ),
-                );
-              },
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Row(
+      child: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            Row(
               children: [
-                Expanded(
-                  child: TextField(
-                    controller: _chatController,
-                    focusNode: _chatFocusNode,
-                    style: const TextStyle(color: Colors.black),
-                    decoration: InputDecoration(
-                      filled: true,
-                      fillColor: Colors.white,
-                      hintText: "Message...",
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 10),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(20)),
+                const Padding(padding: EdgeInsets.all(8.0), child: Text("Chat", style: TextStyle(color: Colors.white, fontSize: 18))),
+                const Spacer(),
+                IconButton(icon: const Icon(Icons.close, color: Colors.white), onPressed: () => setState(() => showChat = false)),
+              ],
+            ),
+            Expanded(
+              child: ListView.builder(
+                controller: _chatScrollController,
+                itemCount: game.chatMessages.length,
+                itemBuilder: (context, index) {
+                  final msg = game.chatMessages[index];
+                  return Align(
+                    alignment: msg.isMe ? Alignment.centerRight : Alignment.centerLeft,
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: msg.isMe ? Colors.blue : Colors.grey,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(msg.text, style: const TextStyle(color: Colors.white)),
                     ),
-                    onSubmitted: (text) {
+                  );
+                },
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _chatController,
+                      focusNode: _chatFocusNode,
+                      style: const TextStyle(color: Colors.black),
+                      decoration: InputDecoration(
+                        filled: true,
+                        fillColor: Colors.white,
+                        hintText: "Message...",
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(20)),
+                      ),
+                      onSubmitted: (text) {
+                        if (text.isNotEmpty) {
+                          game.chatMessages.add(ChatMessage(text: text, isMe: true));
+                          networkManager.sendChat(text);
+                          _chatController.clear();
+                          setState(() {});
+                          _scrollToBottom();
+                          _chatFocusNode.requestFocus();
+                        }
+                      },
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.send, color: Colors.white),
+                    onPressed: () {
+                      final text = _chatController.text;
                       if (text.isNotEmpty) {
                         game.chatMessages.add(ChatMessage(text: text, isMe: true));
                         networkManager.sendChat(text);
@@ -795,25 +1048,11 @@ class _ContentViewState extends State<ContentView> {
                       }
                     },
                   ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.send, color: Colors.white),
-                  onPressed: () {
-                    final text = _chatController.text;
-                    if (text.isNotEmpty) {
-                      game.chatMessages.add(ChatMessage(text: text, isMe: true));
-                      networkManager.sendChat(text);
-                      _chatController.clear();
-                      setState(() {});
-                      _scrollToBottom();
-                      _chatFocusNode.requestFocus();
-                    }
-                  },
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
