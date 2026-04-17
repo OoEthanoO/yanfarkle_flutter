@@ -18,6 +18,9 @@ class GameStatePacket {
   final GameState state;
   final int winner;
   final int goal;
+  final bool p1Ready;
+  final bool p2Ready;
+  final bool isGameStarted;
 
   GameStatePacket({
     required this.p1Score,
@@ -29,6 +32,9 @@ class GameStatePacket {
     required this.state,
     required this.winner,
     required this.goal,
+    required this.p1Ready,
+    required this.p2Ready,
+    required this.isGameStarted,
   });
 
   Map<String, dynamic> toJson() => {
@@ -41,6 +47,9 @@ class GameStatePacket {
         'state': state.name,
         'winner': winner,
         'goal': goal,
+        'p1Ready': p1Ready,
+        'p2Ready': p2Ready,
+        'isGameStarted': isGameStarted,
       };
 
   factory GameStatePacket.fromJson(Map<String, dynamic> json) => GameStatePacket(
@@ -53,6 +62,9 @@ class GameStatePacket {
         state: GameState.values.firstWhere((e) => e.name == json['state'], orElse: () => GameState.turn),
         winner: json['winner'],
         goal: json['goal'],
+        p1Ready: json['p1Ready'] ?? false,
+        p2Ready: json['p2Ready'] ?? false,
+        isGameStarted: json['isGameStarted'] ?? false,
       );
 }
 

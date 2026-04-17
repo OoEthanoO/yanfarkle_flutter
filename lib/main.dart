@@ -2,7 +2,6 @@ import 'dart:math' as math;
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
 import 'game.dart';
 import 'models.dart';
@@ -57,10 +56,11 @@ class _ContentViewState extends State<ContentView> {
   Timer? _p1EmoteTimer;
   Timer? _p2EmoteTimer;
 
-  final TextEditingController _hostIPController = TextEditingController(text: "127.0.0.1");
+  final TextEditingController _hostIPController = TextEditingController();
   final TextEditingController _chatController = TextEditingController();
   final ScrollController _chatScrollController = ScrollController();
   final FocusNode _chatFocusNode = FocusNode();
+  final FocusNode _roomFocusNode = FocusNode();
   final FocusNode _focusNode = FocusNode();
   late bool _isKeyboardActive;
 
@@ -128,6 +128,9 @@ class _ContentViewState extends State<ContentView> {
 
   void _setupNetworkCallbacks(Game game, NetworkManager networkManager) {
     networkManager.onStateReceived = (state) {
+      if (hasReceivedInitialState && isConfiguring && !state.p1Ready && !state.p2Ready && game.state != GameState.gameOver) {
+        setState(() => isConfiguring = false);
+      }
       setState(() {
         hasReceivedInitialState = true;
       });
@@ -177,10 +180,14 @@ class _ContentViewState extends State<ContentView> {
         if (game.isLocalAuthority && game.p1Ready && game.p2Ready) {
           game.start();
           game.syncState();
+          if (mounted && isConfiguring) {
+            setState(() => isConfiguring = false);
+          }
         }
         return;
       }
 
+      // Guest ignore actions, they wait for state
       if (!game.isLocalAuthority) return;
 
       switch (action) {
@@ -210,6 +217,7 @@ class _ContentViewState extends State<ContentView> {
       if (game.state != GameState.gameOver) {
         game.state = GameState.gameOver;
         game.winner = game.myPlayer;
+        game.winReason = "Opponent disconnected";
       } else {
         setState(() {
           isStarted = false;
@@ -219,11 +227,10 @@ class _ContentViewState extends State<ContentView> {
     };
 
     networkManager.onConnected = () {
-      if (game.isLocalAuthority) {
-        setState(() => isConfiguring = true);
-      } else {
-        setState(() => isStarted = true);
-      }
+      setState(() {
+        isStarted = true;
+        isConfiguring = true;
+      });
     };
   }
 
@@ -236,7 +243,7 @@ class _ContentViewState extends State<ContentView> {
       focusNode: _focusNode,
       autofocus: true,
       onKeyEvent: (node, event) {
-        if (_chatFocusNode.hasFocus) return KeyEventResult.ignored;
+        if (_chatFocusNode.hasFocus || _roomFocusNode.hasFocus) return KeyEventResult.ignored;
 
         if (event is KeyDownEvent) {
           if (event.logicalKey == LogicalKeyboardKey.arrowLeft || event.logicalKey == LogicalKeyboardKey.keyA ||
@@ -390,59 +397,58 @@ class _ContentViewState extends State<ContentView> {
                       isConfiguring = true;
                     });
                   }, textColor: const Color(0xFF196633)),
-                  if (!kIsWeb) ...[
-                    const SizedBox(height: 15),
-                    _menuButton("Host LAN Game", Colors.blue, () {
-                      game.start();
-                      hasReceivedInitialState = true;
-                      game.isNetworkGame = true;
-                      game.isBotGame = false;
-                      game.myPlayer = Player.p1;
-                      networkManager.host();
-                      _setupNetworkCallbacks(game, networkManager);
-                      setState(() {
-                        isStarted = true;
-                      });
-                    }),
-                    const SizedBox(height: 20),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        SizedBox(
-                          width: 150,
-                          child: TextField(
-                            controller: _hostIPController,
-                            decoration: const InputDecoration(
-                              fillColor: Colors.white,
-                              filled: true,
-                              hintText: "Host IP",
-                              border: OutlineInputBorder(),
-                            ),
-                            style: const TextStyle(color: Colors.black),
+                  const SizedBox(height: 15),
+                  _menuButton("Host Online Game", Colors.purple, () {
+                    game.start();
+                    hasReceivedInitialState = true;
+                    game.isNetworkGame = true;
+                    game.isBotGame = false;
+                    game.myPlayer = Player.p1;
+                    networkManager.hostOnline();
+                    _setupNetworkCallbacks(game, networkManager);
+                    setState(() {
+                      isStarted = true;
+                    });
+                  }),
+                  const SizedBox(height: 20),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 150,
+                        child: TextField(
+                          controller: _hostIPController,
+                          focusNode: _roomFocusNode,
+                          decoration: const InputDecoration(
+                            fillColor: Colors.white,
+                            filled: true,
+                            hintText: "Room ID",
+                            border: OutlineInputBorder(),
                           ),
+                          style: const TextStyle(color: Colors.black),
                         ),
-                        const SizedBox(width: 10),
-                        ElevatedButton(
-                          onPressed: networkManager.isConnecting ? null : () {
-                            game.start();
-                            hasReceivedInitialState = false;
-                            game.isNetworkGame = true;
-                            game.isBotGame = false;
-                            game.myPlayer = Player.p2;
-                            networkManager.connect(host: _hostIPController.text);
-                            _setupNetworkCallbacks(game, networkManager);
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.orange,
-                            foregroundColor: Colors.white,
-                          ),
-                          child: networkManager.isConnecting
-                              ? const CircularProgressIndicator(color: Colors.white)
-                              : const Text("Join LAN"),
+                      ),
+                      const SizedBox(width: 10),
+                      ElevatedButton(
+                        onPressed: networkManager.isConnecting ? null : () {
+                          game.start();
+                          hasReceivedInitialState = false;
+                          game.isNetworkGame = true;
+                          game.isBotGame = false;
+                          game.myPlayer = Player.p2;
+                          networkManager.joinOnline(_hostIPController.text);
+                          _setupNetworkCallbacks(game, networkManager);
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.purple,
+                          foregroundColor: Colors.white,
                         ),
-                      ],
-                    ),
-                  ],
+                        child: networkManager.isConnecting
+                            ? const CircularProgressIndicator(color: Colors.white)
+                            : const Text("Join Online"),
+                      ),
+                    ],
+                  ),
                   if (networkManager.connectionError != null)
                     Padding(
                       padding: const EdgeInsets.only(top: 10),
@@ -470,6 +476,28 @@ class _ContentViewState extends State<ContentView> {
     ),
   );
 }
+
+  Widget _playerReadyStatus(String label, bool isReady) {
+    return Column(
+      children: [
+        Text(label, style: const TextStyle(fontSize: 18, color: Colors.white)),
+        const SizedBox(height: 8),
+        Icon(
+          isReady ? Icons.check_circle : Icons.circle_outlined,
+          color: isReady ? Colors.greenAccent : Colors.white38,
+          size: 48,
+        ),
+        Text(
+          isReady ? "READY" : "WAITING",
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+            color: isReady ? Colors.greenAccent : Colors.white38,
+          ),
+        ),
+      ],
+    );
+  }
 
   Widget _menuButton(String text, Color color, VoidCallback onPressed, {Color textColor = Colors.white}) {
     return ElevatedButton(
@@ -504,27 +532,51 @@ class _ContentViewState extends State<ContentView> {
                       const Text("Goal: ", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
                       IconButton(
                         icon: const Icon(Icons.remove_circle, color: Colors.white),
-                        onPressed: () {
+                        onPressed: !game.isLocalAuthority ? null : () {
                           if (game.winPoints > 1000) setState(() => game.winPoints -= 1000);
                         },
                       ),
                       Text("${game.winPoints}", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.yellow)),
                       IconButton(
                         icon: const Icon(Icons.add_circle, color: Colors.white),
-                        onPressed: () {
+                        onPressed: !game.isLocalAuthority ? null : () {
                           if (game.winPoints < 10000) setState(() => game.winPoints += 1000);
                         },
                       ),
                     ],
                   ),
                   const SizedBox(height: 40),
-                  _menuButton("Start Game", Colors.white, () {
-                    game.start();
-                    setState(() => isConfiguring = false);
-                    if (game.isNetworkGame) {
-                      Future.delayed(const Duration(milliseconds: 500), () => game.syncState());
-                    }
-                  }, textColor: const Color(0xFF196633)),
+                  if (game.isNetworkGame) ...[
+                    Text(
+                      networkManager.isHosting ? "Hosting Lobby" : "Joined Lobby",
+                      style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      "Room ID: ${networkManager.roomID}",
+                      style: const TextStyle(fontSize: 24, color: Colors.yellow),
+                    ),
+                    const SizedBox(height: 30),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        _playerReadyStatus("You", game.myPlayer == Player.p1 ? game.p1Ready : game.p2Ready),
+                        const SizedBox(width: 40),
+                        _playerReadyStatus("Opponent", game.myPlayer == Player.p1 ? game.p2Ready : game.p1Ready),
+                      ],
+                    ),
+                    const SizedBox(height: 40),
+                    _menuButton(
+                      (game.myPlayer == Player.p1 ? game.p1Ready : game.p2Ready) ? "Unready" : "Ready Up",
+                      (game.myPlayer == Player.p1 ? game.p1Ready : game.p2Ready) ? Colors.red : Colors.green,
+                      () => game.readyUp(),
+                    ),
+                  ] else ...[
+                    _menuButton("Start Game", Colors.white, () {
+                      game.start();
+                      setState(() => isConfiguring = false);
+                    }, textColor: const Color(0xFF196633)),
+                  ],
                   const SizedBox(height: 15),
                   _menuButton("Cancel", Colors.red, () {
                     networkManager.stop();
@@ -558,6 +610,11 @@ class _ContentViewState extends State<ContentView> {
                     Text(game.playerName(game.winner!) == "You" ? "You Win!" : "${game.playerName(game.winner!)} Wins!", style: const TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.white))
                   else
                     const Text("Someone Wins!", style: TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.white)),
+                  if (game.winReason != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8.0),
+                      child: Text(game.winReason!, style: const TextStyle(fontSize: 18, color: Colors.white70)),
+                    ),
                   const SizedBox(height: 30),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -578,10 +635,26 @@ class _ContentViewState extends State<ContentView> {
                     ],
                   ),
                   const SizedBox(height: 40),
-                  if (!game.isNetworkGame)
+                  if (game.isNetworkGame) ...[
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        _playerReadyStatus("You", game.myPlayer == Player.p1 ? game.p1Ready : game.p2Ready),
+                        const SizedBox(width: 40),
+                        _playerReadyStatus("Opponent", game.myPlayer == Player.p1 ? game.p2Ready : game.p1Ready),
+                      ],
+                    ),
+                    const SizedBox(height: 30),
+                    _menuButton(
+                      (game.myPlayer == Player.p1 ? game.p1Ready : game.p2Ready) ? "Unready" : "Play Again",
+                      (game.myPlayer == Player.p1 ? game.p1Ready : game.p2Ready) ? Colors.red : Colors.green,
+                      () => game.readyUp(),
+                    ),
+                  ] else ...[
                     _menuButton("Play Again", Colors.white, () {
                       game.start();
                     }, textColor: const Color(0xFF196633)),
+                  ],
                   const SizedBox(height: 15),
                   _menuButton("Exit to Menu", Colors.red, () {
                     networkManager.stop();
@@ -706,7 +779,7 @@ class _ContentViewState extends State<ContentView> {
                               const CircularProgressIndicator(color: Colors.white),
                               const SizedBox(height: 10),
                               if (networkManager.isHosting)
-                                Text("Hosting at ${networkManager.hostIPAddress ?? '...'}\nWaiting for opponent...", style: const TextStyle(color: Colors.white, fontSize: 20), textAlign: TextAlign.center)
+                                Text("Room ID: ${networkManager.roomID ?? '...'}\nWaiting for opponent...", style: const TextStyle(color: Colors.white, fontSize: 20), textAlign: TextAlign.center)
                               else
                                 const Text("Waiting for opponent...", style: TextStyle(color: Colors.white, fontSize: 20)),
                             ] else if (game.isNetworkGame && !hasReceivedInitialState) ...[
@@ -895,33 +968,35 @@ class _ContentViewState extends State<ContentView> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text("Sent an Emote", style: TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.bold)),
+            const Text("Send an Emote", style: TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
-            GridView.builder(
-              shrinkWrap: true,
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 4,
-                mainAxisSpacing: 10,
-                crossAxisSpacing: 10,
-              ),
-              itemCount: emotes.length,
-              itemBuilder: (context, index) {
-                return GestureDetector(
-                  onTap: () {
-                    _showEmote(game.myPlayer, emotes[index]);
-                    networkManager.sendAction(GameAction.emote, value: index);
-                    Navigator.pop(context);
-                  },
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(10),
+            Flexible(
+              child: GridView.builder(
+                shrinkWrap: true,
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 4,
+                  mainAxisSpacing: 10,
+                  crossAxisSpacing: 10,
+                ),
+                itemCount: emotes.length,
+                itemBuilder: (context, index) {
+                  return GestureDetector(
+                    onTap: () {
+                      _showEmote(game.myPlayer, emotes[index]);
+                      networkManager.sendAction(GameAction.emote, value: index);
+                      Navigator.pop(context);
+                    },
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(emotes[index], style: const TextStyle(fontSize: 32)),
                     ),
-                    alignment: Alignment.center,
-                    child: Text(emotes[index], style: const TextStyle(fontSize: 32)),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
           ],
         ),

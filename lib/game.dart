@@ -46,6 +46,7 @@ class Game extends ChangeNotifier {
   }
 
   Player? winner;
+  String? winReason;
   int turnScore = 0;
   List<int> remainingDice = [];
   Set<int> selectedDice = {};
@@ -55,6 +56,7 @@ class Game extends ChangeNotifier {
   Player myPlayer = Player.p1;
   bool p1Ready = false;
   bool p2Ready = false;
+  bool isGameStarted = false;
 
   String localP1Name = "Player 1";
   String localP2Name = "Player 2";
@@ -74,9 +76,11 @@ class Game extends ChangeNotifier {
   void start() {
     playerScores = {Player.p1: 0, Player.p2: 0};
     winner = null;
+    winReason = null;
     currentPlayer = _random.nextBool() ? Player.p1 : Player.p2;
     p1Ready = false;
     p2Ready = false;
+    isGameStarted = true;
     chatMessages.clear();
     resetTurn();
   }
@@ -327,16 +331,32 @@ class Game extends ChangeNotifier {
       state: state,
       winner: winner?.rawValue ?? 0,
       goal: winPoints,
+      p1Ready: p1Ready,
+      p2Ready: p2Ready,
+      isGameStarted: isGameStarted,
     );
   }
 
   void fromPacket(GameStatePacket packet) {
     setScore(Player.p1, packet.p1Score);
     setScore(Player.p2, packet.p2Score);
+    bool stateChanged = _state != packet.state;
+    bool diceChanged = remainingDice.length != packet.remainingDice.length;
+    bool scoreChanged = turnScore != packet.turnScore;
+    bool playerChanged = currentPlayer != PlayerExtension.fromRawValue(packet.currentPlayer);
+    bool shouldSyncSelection = isLocalAuthority || !isLocalTurn || stateChanged || diceChanged || scoreChanged || playerChanged;
+
     currentPlayer = PlayerExtension.fromRawValue(packet.currentPlayer);
     turnScore = packet.turnScore;
     remainingDice = packet.remainingDice;
-    selectedDice = packet.selectedDice.where((idx) => idx >= 0 && idx < packet.remainingDice.length).toSet();
+    
+    if (shouldSyncSelection) {
+      selectedDice = packet.selectedDice.where((idx) => idx >= 0 && idx < packet.remainingDice.length).toSet();
+    }
+
+    p1Ready = packet.p1Ready;
+    p2Ready = packet.p2Ready;
+    isGameStarted = packet.isGameStarted;
 
     GameState oldState = _state;
     _state = packet.state;
@@ -411,8 +431,27 @@ class Game extends ChangeNotifier {
   }
 
   void syncState() {
-    if (isNetworkGame && NetworkManager.shared.isHosting) {
-      NetworkManager.shared.sendState(toPacket());
+    if (isNetworkGame) {
+      if (isLocalAuthority) {
+        NetworkManager.shared.sendState(toPacket());
+      }
+    }
+  }
+
+  void readyUp() {
+    if (isNetworkGame) {
+      NetworkManager.shared.sendAction(GameAction.readyUp, value: myPlayer.rawValue);
+      if (myPlayer == Player.p1) {
+        p1Ready = !p1Ready;
+      } else {
+        p2Ready = !p2Ready;
+      }
+      
+      if (isLocalAuthority && p1Ready && p2Ready) {
+        start();
+        syncState();
+      }
+      notifyListeners();
     }
   }
 }
