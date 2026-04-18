@@ -32,6 +32,7 @@ class NetworkManager extends ChangeNotifier {
   Function(GameAction, int)? onActionReceived;
   Function(String)? onChatReceived;
   Function()? onDisconnected;
+  Function()? onGuestLeft;
   Function()? onConnected;
   Function(String)? onRoomCreated;
 
@@ -52,8 +53,12 @@ class NetworkManager extends ChangeNotifier {
     _chatSubscription?.cancel();
     _presenceSubscription?.cancel();
     
-    if (isHosting && _roomRef != null) {
-      _roomRef!.remove();
+    if (_roomRef != null) {
+      if (isHosting) {
+        _roomRef!.remove();
+      } else if (isConnected) {
+        _roomRef!.update({"guestConnected": false}).catchError((_) {});
+      }
     }
 
     _roomRef = null;
@@ -165,7 +170,10 @@ class NetworkManager extends ChangeNotifier {
             onConnected?.call();
             notifyListeners();
           } else if (!guestConnected && isConnected) {
-            stop();
+            isConnected = false;
+            isConnecting = true; // Return to waiting state
+            onGuestLeft?.call();
+            notifyListeners();
           }
         }
       }

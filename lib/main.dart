@@ -229,12 +229,38 @@ class _ContentViewState extends State<ContentView> {
     };
 
     networkManager.onDisconnected = () {
-      if (game.state != GameState.gameOver) {
-        game.state = GameState.gameOver;
-        game.winner = game.myPlayer;
-        game.winReason = "Opponent disconnected";
+      if (isConfiguring) {
+        setState(() {
+          isStarted = false;
+          isConfiguring = false;
+        });
       } else {
-        setState(() {}); // Rebuild to show disconnected UI if game is already over
+        if (game.state != GameState.gameOver) {
+          game.state = GameState.gameOver;
+          game.winner = game.myPlayer;
+          game.winReason = "Opponent disconnected";
+        } else {
+          setState(() {}); // Rebuild to show disconnected UI if game is already over
+        }
+      }
+    };
+
+    networkManager.onGuestLeft = () {
+      if (isConfiguring || !game.isGameStarted) {
+        setState(() {
+          isConfiguring = true; // Still in the setup phase implicitly but waiting
+          game.p1Ready = false;
+          game.p2Ready = false;
+          game.syncState();
+        });
+      } else {
+        if (game.state != GameState.gameOver) {
+          game.state = GameState.gameOver;
+          game.winner = game.myPlayer;
+          game.winReason = "Opponent disconnected";
+        } else {
+          setState(() {}); // Rebuild to show disconnected UI if game is already over
+        }
       }
     };
 
@@ -360,6 +386,22 @@ class _ContentViewState extends State<ContentView> {
     if (!isStarted) {
       return _buildMainMenu(game, networkManager);
     } else if (isConfiguring) {
+      if (game.isNetworkGame && networkManager.isHosting && !networkManager.isConnected) {
+        // Host is configuring but waiting for someone to join (or guest left)
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            _buildGame(game, networkManager),
+            if (showChat)
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: _buildChat(game, networkManager),
+              ),
+          ],
+        );
+      }
       return _buildConfigMenu(game, networkManager);
     } else if (game.state == GameState.gameOver) {
       return _buildGameOver(game, networkManager);
@@ -574,9 +616,28 @@ class _ContentViewState extends State<ContentView> {
                       style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white),
                     ),
                     const SizedBox(height: 10),
-                    Text(
-                      "Room ID: ${networkManager.roomID}",
-                      style: const TextStyle(fontSize: 24, color: Colors.yellow),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          "Room ID: ${networkManager.roomID}",
+                          style: const TextStyle(fontSize: 24, color: Colors.yellow),
+                        ),
+                        if (networkManager.isHosting) ...[
+                          const SizedBox(width: 8),
+                          IconButton(
+                            icon: const Icon(Icons.copy, color: Colors.yellow),
+                            onPressed: () {
+                              if (networkManager.roomID != null) {
+                                Clipboard.setData(ClipboardData(text: networkManager.roomID!));
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Room ID copied to clipboard!'), duration: Duration(seconds: 2)),
+                                );
+                              }
+                            },
+                          ),
+                        ],
+                      ],
                     ),
                     const SizedBox(height: 30),
                     Row(
@@ -712,6 +773,9 @@ class _ContentViewState extends State<ContentView> {
 
   Widget _buildGame(Game game, NetworkManager networkManager) {
     bool isWaiting = game.isNetworkGame && !networkManager.isConnected;
+    if (isConfiguring && game.isNetworkGame && networkManager.isHosting) {
+       isWaiting = true;
+    }
     bool actionEnabled = game.isLocalTurn && !isWaiting && hasReceivedInitialState;
     int potentialScore = game.calculateSelectedScore();
 
@@ -793,16 +857,17 @@ class _ContentViewState extends State<ContentView> {
                                 ],
                               ),
                             ),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  _scoreCard(game, game.isNetworkGame || game.isBotGame ? game.myPlayer : Player.p1),
-                                  _scoreCard(game, game.isNetworkGame || game.isBotGame ? game.myPlayer.next : Player.p2),
-                                ],
+                            if (!isWaiting && hasReceivedInitialState)
+                              Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    _scoreCard(game, game.isNetworkGame || game.isBotGame ? game.myPlayer : Player.p1),
+                                    _scoreCard(game, game.isNetworkGame || game.isBotGame ? game.myPlayer.next : Player.p2),
+                                  ],
+                                ),
                               ),
-                            ),
                             if (!isWaiting && hasReceivedInitialState) ...[
                               Text(
                                 game.isNetworkGame ? (game.isLocalTurn ? "Your Turn" : "Opponent's Turn") : "${game.playerName(game.currentPlayer)}'s Turn",
@@ -811,19 +876,45 @@ class _ContentViewState extends State<ContentView> {
                               Text("Goal: ${game.winPoints}", style: const TextStyle(color: Colors.white70)),
                               Text("Turn Score: ${game.turnScore}", style: const TextStyle(fontSize: 20, color: Colors.yellow)),
                             ],
-                            const Spacer(),
                             if (isWaiting) ...[
+                              const Spacer(),
                               const CircularProgressIndicator(color: Colors.white),
                               const SizedBox(height: 10),
                               if (networkManager.isHosting)
-                                Text("Room ID: ${networkManager.roomID ?? '...'}\nWaiting for opponent...", style: const TextStyle(color: Colors.white, fontSize: 20), textAlign: TextAlign.center)
+                                Column(
+                                  children: [
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Text("Room ID: ${networkManager.roomID ?? '...'}", style: const TextStyle(color: Colors.white, fontSize: 20)),
+                                        const SizedBox(width: 8),
+                                        IconButton(
+                                          icon: const Icon(Icons.copy, color: Colors.white),
+                                          onPressed: () {
+                                            if (networkManager.roomID != null) {
+                                              Clipboard.setData(ClipboardData(text: networkManager.roomID!));
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                const SnackBar(content: Text('Room ID copied to clipboard!'), duration: Duration(seconds: 2)),
+                                              );
+                                            }
+                                          },
+                                        ),
+                                      ],
+                                    ),
+                                    const Text("Waiting for opponent...", style: TextStyle(color: Colors.white, fontSize: 20), textAlign: TextAlign.center),
+                                  ],
+                                )
                               else
                                 const Text("Waiting for opponent...", style: TextStyle(color: Colors.white, fontSize: 20)),
+                              const Spacer(),
                             ] else if (game.isNetworkGame && !hasReceivedInitialState) ...[
+                              const Spacer(),
                               const CircularProgressIndicator(color: Colors.white),
                               const SizedBox(height: 10),
                               const Text("Waiting for host...", style: TextStyle(color: Colors.white, fontSize: 20)),
+                              const Spacer(),
                             ] else ...[
+                              const Spacer(),
                               SizedBox(
                                 height: 60,
                                 child: game.state == GameState.bust
