@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'game.dart';
 import 'models.dart';
 import 'network_manager.dart';
@@ -63,6 +64,7 @@ class _ContentViewState extends State<ContentView> {
   final FocusNode _roomFocusNode = FocusNode();
   final FocusNode _focusNode = FocusNode();
   late bool _isKeyboardActive;
+  String _versionString = "";
 
   @override
   void initState() {
@@ -70,6 +72,16 @@ class _ContentViewState extends State<ContentView> {
     // Initialize based on both current highlight mode and whether a keyboard is physically present.
     _isKeyboardActive = FocusManager.instance.highlightMode == FocusHighlightMode.traditional;
     FocusManager.instance.addHighlightModeListener(_handleFocusHighlightModeChange);
+    _initPackageInfo();
+  }
+
+  Future<void> _initPackageInfo() async {
+    final info = await PackageInfo.fromPlatform();
+    if (mounted) {
+      setState(() {
+        _versionString = "v${info.version}+${info.buildNumber}";
+      });
+    }
   }
 
   void _handleFocusHighlightModeChange(FocusHighlightMode mode) {
@@ -128,9 +140,6 @@ class _ContentViewState extends State<ContentView> {
 
   void _setupNetworkCallbacks(Game game, NetworkManager networkManager) {
     networkManager.onStateReceived = (state) {
-      if (hasReceivedInitialState && isConfiguring && !state.p1Ready && !state.p2Ready && game.state != GameState.gameOver) {
-        setState(() => isConfiguring = false);
-      }
       setState(() {
         hasReceivedInitialState = true;
       });
@@ -169,20 +178,26 @@ class _ContentViewState extends State<ContentView> {
         return;
       }
 
+      if (action == GameAction.startGame) {
+        if (mounted && isConfiguring) {
+          setState(() => isConfiguring = false);
+        }
+        return;
+      }
+
       if (action == GameAction.readyUp) {
         Player sender = PlayerExtension.fromRawValue(value);
-        if (sender == Player.p1) {
-          game.p1Ready = !game.p1Ready;
-        } else if (sender == Player.p2) {
-          game.p2Ready = !game.p2Ready;
-        }
+        game.togglePlayerReady(sender);
         
         if (game.isLocalAuthority && game.p1Ready && game.p2Ready) {
           game.start();
+          NetworkManager.shared.sendAction(GameAction.startGame);
           game.syncState();
           if (mounted && isConfiguring) {
             setState(() => isConfiguring = false);
           }
+        } else if (game.isLocalAuthority) {
+          game.syncState();
         }
         return;
       }
@@ -219,10 +234,7 @@ class _ContentViewState extends State<ContentView> {
         game.winner = game.myPlayer;
         game.winReason = "Opponent disconnected";
       } else {
-        setState(() {
-          isStarted = false;
-          isConfiguring = false;
-        });
+        setState(() {}); // Rebuild to show disconnected UI if game is already over
       }
     };
 
@@ -328,6 +340,14 @@ class _ContentViewState extends State<ContentView> {
                   Positioned.fill(
                     child: RulesView(onDismiss: () => setState(() => showRules = false)),
                   ),
+                Positioned(
+                  bottom: 8,
+                  right: 8,
+                  child: Text(
+                    _versionString,
+                    style: const TextStyle(color: Colors.white54, fontSize: 12),
+                  ),
+                ),
               ],
             ),
           ),
@@ -477,22 +497,22 @@ class _ContentViewState extends State<ContentView> {
   );
 }
 
-  Widget _playerReadyStatus(String label, bool isReady) {
+  Widget _playerReadyStatus(String label, bool isReady, {bool isDisconnected = false}) {
     return Column(
       children: [
         Text(label, style: const TextStyle(fontSize: 18, color: Colors.white)),
         const SizedBox(height: 8),
         Icon(
-          isReady ? Icons.check_circle : Icons.circle_outlined,
-          color: isReady ? Colors.greenAccent : Colors.white38,
+          isDisconnected ? Icons.close : (isReady ? Icons.check_circle : Icons.circle_outlined),
+          color: isDisconnected ? Colors.red : (isReady ? Colors.greenAccent : Colors.white38),
           size: 48,
         ),
         Text(
-          isReady ? "READY" : "WAITING",
+          isDisconnected ? "LEFT" : (isReady ? "READY" : "WAITING"),
           style: TextStyle(
             fontSize: 14,
             fontWeight: FontWeight.bold,
-            color: isReady ? Colors.greenAccent : Colors.white38,
+            color: isDisconnected ? Colors.red : (isReady ? Colors.greenAccent : Colors.white38),
           ),
         ),
       ],
@@ -526,26 +546,28 @@ class _ContentViewState extends State<ContentView> {
                   children: [
                   const Text("Game Setup", style: TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.white)),
                   const SizedBox(height: 20),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Text("Goal: ", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
-                      IconButton(
-                        icon: const Icon(Icons.remove_circle, color: Colors.white),
-                        onPressed: !game.isLocalAuthority ? null : () {
-                          if (game.winPoints > 1000) setState(() => game.winPoints -= 1000);
-                        },
-                      ),
-                      Text("${game.winPoints}", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.yellow)),
-                      IconButton(
-                        icon: const Icon(Icons.add_circle, color: Colors.white),
-                        onPressed: !game.isLocalAuthority ? null : () {
-                          if (game.winPoints < 10000) setState(() => game.winPoints += 1000);
-                        },
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 40),
+                  if (game.isLocalAuthority)
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Text("Goal: ", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
+                        IconButton(
+                          icon: const Icon(Icons.remove_circle, color: Colors.white),
+                          onPressed: () {
+                            if (game.winPoints > 1000) setState(() => game.winPoints -= 1000);
+                          },
+                        ),
+                        Text("${game.winPoints}", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.yellow)),
+                        IconButton(
+                          icon: const Icon(Icons.add_circle, color: Colors.white),
+                          onPressed: () {
+                            if (game.winPoints < 10000) setState(() => game.winPoints += 1000);
+                          },
+                        ),
+                      ],
+                    ),
+                  if (game.isLocalAuthority)
+                    const SizedBox(height: 40),
                   if (game.isNetworkGame) ...[
                     Text(
                       networkManager.isHosting ? "Hosting Lobby" : "Joined Lobby",
@@ -569,7 +591,12 @@ class _ContentViewState extends State<ContentView> {
                     _menuButton(
                       (game.myPlayer == Player.p1 ? game.p1Ready : game.p2Ready) ? "Unready" : "Ready Up",
                       (game.myPlayer == Player.p1 ? game.p1Ready : game.p2Ready) ? Colors.red : Colors.green,
-                      () => game.readyUp(),
+                      () {
+                        bool started = game.readyUp();
+                        if (started) {
+                          setState(() => isConfiguring = false);
+                        }
+                      },
                     ),
                   ] else ...[
                     _menuButton("Start Game", Colors.white, () {
@@ -635,25 +662,35 @@ class _ContentViewState extends State<ContentView> {
                     ],
                   ),
                   const SizedBox(height: 40),
-                  if (game.isNetworkGame) ...[
+                  if (game.isNetworkGame && game.winReason == null) ...[
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         _playerReadyStatus("You", game.myPlayer == Player.p1 ? game.p1Ready : game.p2Ready),
                         const SizedBox(width: 40),
-                        _playerReadyStatus("Opponent", game.myPlayer == Player.p1 ? game.p2Ready : game.p1Ready),
+                        if (!networkManager.isConnected)
+                          _playerReadyStatus("Opponent", false, isDisconnected: true)
+                        else
+                          _playerReadyStatus("Opponent", game.myPlayer == Player.p1 ? game.p2Ready : game.p1Ready),
                       ],
                     ),
                     const SizedBox(height: 30),
-                    _menuButton(
-                      (game.myPlayer == Player.p1 ? game.p1Ready : game.p2Ready) ? "Unready" : "Play Again",
-                      (game.myPlayer == Player.p1 ? game.p1Ready : game.p2Ready) ? Colors.red : Colors.green,
-                      () => game.readyUp(),
-                    ),
+                    if (networkManager.isConnected)
+                      _menuButton(
+                        (game.myPlayer == Player.p1 ? game.p1Ready : game.p2Ready) ? "Unready" : "Play Again",
+                        (game.myPlayer == Player.p1 ? game.p1Ready : game.p2Ready) ? Colors.red : Colors.green,
+                        () {
+                          bool started = game.readyUp();
+                          if (started) {
+                            setState(() => isConfiguring = false);
+                          }
+                        },
+                      ),
                   ] else ...[
-                    _menuButton("Play Again", Colors.white, () {
-                      game.start();
-                    }, textColor: const Color(0xFF196633)),
+                    if (!game.isNetworkGame)
+                      _menuButton("Play Again", Colors.white, () {
+                        game.start();
+                      }, textColor: const Color(0xFF196633)),
                   ],
                   const SizedBox(height: 15),
                   _menuButton("Exit to Menu", Colors.red, () {
@@ -1455,15 +1492,18 @@ class RulePage5 extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        const SizedBox(height: 30),
-        const Text("Farkle & Hot Dice", style: TextStyle(fontSize: 36, fontWeight: FontWeight.bold, color: Colors.white)),
-        const SizedBox(height: 25),
-        _infoBox("FARKLE (Bust!)", Colors.red, "If your roll has NO scoring dice, you Farkle! You lose all points accumulated during that turn.", [2, 3, 4, 6], false),
-        const SizedBox(height: 25),
-        _infoBox("🔥 HOT DICE! 🔥", Colors.orange, "If you manage to select and score with ALL 6 dice, you get Hot Dice! You can roll all 6 again and keep building your turn score.", [5, 5, 5, 5, 5, 5], true),
-      ],
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          const SizedBox(height: 30),
+          const Text("Farkle & Hot Dice", style: TextStyle(fontSize: 36, fontWeight: FontWeight.bold, color: Colors.white)),
+          const SizedBox(height: 25),
+          _infoBox("FARKLE (Bust!)", Colors.red, "If your roll has NO scoring dice, you Farkle! You lose all points accumulated during that turn.", [2, 3, 4, 6], false),
+          const SizedBox(height: 25),
+          _infoBox("🔥 HOT DICE! 🔥", Colors.orange, "If you manage to select and score with ALL 6 dice, you get Hot Dice! You can roll all 6 again and keep building your turn score.", [5, 5, 5, 5, 5, 5], true),
+          const SizedBox(height: 60), // Add padding for bottom navigation
+        ],
+      ),
     );
   }
 
@@ -1506,17 +1546,20 @@ class RulePage6 extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        const SizedBox(height: 30),
-        const Text("Score & Roll vs Score & End", style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white), textAlign: TextAlign.center),
-        const SizedBox(height: 25),
-        const Text("After selecting scoring dice, you have two choices:", style: TextStyle(fontSize: 20, color: Colors.white70), textAlign: TextAlign.center),
-        const SizedBox(height: 25),
-        _choiceBox("Score & Roll", Colors.blue, "Locks in your selected dice points to your turn score and rolls the remaining dice. It's risky but rewarding!"),
-        const SizedBox(height: 25),
-        _choiceBox("Score & End", Colors.orange, "Banks your total turn score into your overall score and safely ends your turn."),
-      ],
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          const SizedBox(height: 30),
+          const Text("Score & Roll vs Score & End", style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white), textAlign: TextAlign.center),
+          const SizedBox(height: 25),
+          const Text("After selecting scoring dice, you have two choices:", style: TextStyle(fontSize: 20, color: Colors.white70), textAlign: TextAlign.center),
+          const SizedBox(height: 25),
+          _choiceBox("Score & Roll", Colors.blue, "Locks in your selected dice points to your turn score and rolls the remaining dice. It's risky but rewarding!"),
+          const SizedBox(height: 25),
+          _choiceBox("Score & End", Colors.orange, "Banks your total turn score into your overall score and safely ends your turn."),
+          const SizedBox(height: 60), // Add padding for bottom navigation
+        ],
+      ),
     );
   }
 

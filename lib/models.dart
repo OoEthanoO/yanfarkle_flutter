@@ -69,5 +69,5 @@ class GameStatePacket {
 }
 
 enum GameAction {
-  select, moveLeft, moveRight, moveTo, roll, score, bustAck, nextTurn, moveUp, moveDown, continueRoll, endTurn, bust, readyUp, emote
+  select, moveLeft, moveRight, moveTo, roll, score, bustAck, nextTurn, moveUp, moveDown, continueRoll, endTurn, bust, readyUp, emote, startGame
 }

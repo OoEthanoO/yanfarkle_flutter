@@ -49,3 +49,12 @@ google-services.json
 GoogleService-Info.plist
 firebase_options.dart
 *secret*
+
+# Firebase CLI generated files
+.firebase/
+.firebaserc
+firebase.json
+
+# Tooling
+.agents/
+skills-lock.json

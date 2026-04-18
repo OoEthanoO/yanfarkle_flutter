@@ -438,20 +438,29 @@ class Game extends ChangeNotifier {
     }
   }
 
-  void readyUp() {
+  bool readyUp() {
     if (isNetworkGame) {
       NetworkManager.shared.sendAction(GameAction.readyUp, value: myPlayer.rawValue);
-      if (myPlayer == Player.p1) {
-        p1Ready = !p1Ready;
-      } else {
-        p2Ready = !p2Ready;
-      }
+      togglePlayerReady(myPlayer);
       
       if (isLocalAuthority && p1Ready && p2Ready) {
         start();
+        NetworkManager.shared.sendAction(GameAction.startGame);
+        syncState();
+        return true;
+      } else if (isLocalAuthority) {
         syncState();
       }
-      notifyListeners();
     }
+    return false;
+  }
+
+  void togglePlayerReady(Player player) {
+    if (player == Player.p1) {
+      p1Ready = !p1Ready;
+    } else {
+      p2Ready = !p2Ready;
+    }
+    notifyListeners();
   }
 }
