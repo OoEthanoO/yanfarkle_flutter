@@ -304,7 +304,7 @@ class _ContentViewState extends State<ContentView> {
               }
             }
             return KeyEventResult.handled;
-          } else if (event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.space) {
+          } else if (event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.space || event.logicalKey == LogicalKeyboardKey.keyE) {
             if (showChat) return KeyEventResult.ignored;
 
             if (game.isLocalTurn && game.state != GameState.rolling && game.state != GameState.bust) {
