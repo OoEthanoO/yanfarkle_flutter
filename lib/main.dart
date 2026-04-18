@@ -394,14 +394,15 @@ class _ContentViewState extends State<ContentView> {
                   Positioned.fill(
                     child: RulesView(onDismiss: () => setState(() => showRules = false)),
                   ),
-                Positioned(
-                  bottom: 8,
-                  right: 8,
-                  child: Text(
-                    _versionString,
-                    style: const TextStyle(color: Colors.white54, fontSize: 12),
+                if (!isStarted)
+                  Positioned(
+                    bottom: 8,
+                    right: 8,
+                    child: Text(
+                      _versionString,
+                      style: const TextStyle(color: Colors.white54, fontSize: 12),
+                    ),
                   ),
-                ),
               ],
             ),
           ),
@@ -1268,24 +1269,6 @@ class _ContentViewState extends State<ContentView> {
                         }
                       },
                     ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.send, color: Colors.white),
-                    onPressed: () {
-                      final text = _chatController.text;
-                      if (text.isNotEmpty) {
-                        game.chatMessages.add(ChatMessage(text: text, isMe: true));
-                        networkManager.sendChat(text);
-                        _chatController.clear();
-                        setState(() {});
-                        _scrollToBottom();
-                        // Re-request focus explicitly but delay to ensure the framework
-                        // does not cause a flicker if the button press caused unfocus
-                        Future.delayed(const Duration(milliseconds: 10), () {
-                          if (mounted) _chatFocusNode.requestFocus();
-                        });
-                      }
-                    },
                   ),
                 ],
               ),
