@@ -69,6 +69,7 @@ class _ContentViewState extends State<ContentView> {
   @override
   void initState() {
     super.initState();
+    HardwareKeyboard.instance.addHandler(_handleGlobalKey);
     // Initialize based on both current highlight mode and whether a keyboard is physically present.
     _isKeyboardActive = FocusManager.instance.highlightMode == FocusHighlightMode.traditional;
     FocusManager.instance.addHighlightModeListener(_handleFocusHighlightModeChange);
@@ -95,6 +96,7 @@ class _ContentViewState extends State<ContentView> {
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleGlobalKey);
     FocusManager.instance.removeHighlightModeListener(_handleFocusHighlightModeChange);
     _hostIPController.dispose();
     _chatController.dispose();
@@ -272,6 +274,93 @@ class _ContentViewState extends State<ContentView> {
     };
   }
 
+  bool _handleGlobalKey(KeyEvent event) {
+    if (_chatFocusNode.hasFocus) {
+      if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.escape) {
+        setState(() => showChat = false);
+        _chatFocusNode.unfocus();
+        _focusNode.requestFocus();
+        return true;
+      }
+      return false;
+    }
+    if (_roomFocusNode.hasFocus) return false;
+
+    if (event is KeyDownEvent) {
+      final game = context.read<Game>();
+      final networkManager = context.read<NetworkManager>();
+
+      if (showChat || showRules) {
+        if (event.logicalKey == LogicalKeyboardKey.escape) {
+          if (showChat) {
+            setState(() => showChat = false);
+            _chatFocusNode.unfocus();
+          }
+          if (showRules) {
+            setState(() => showRules = false);
+          }
+          _focusNode.requestFocus();
+          return true;
+        }
+        return false; // Disable game keybindings when an overlay is open
+      }
+
+      if (event.logicalKey == LogicalKeyboardKey.arrowLeft || event.logicalKey == LogicalKeyboardKey.keyA ||
+          event.logicalKey == LogicalKeyboardKey.arrowRight || event.logicalKey == LogicalKeyboardKey.keyD ||
+          event.logicalKey == LogicalKeyboardKey.arrowUp || event.logicalKey == LogicalKeyboardKey.keyW ||
+          event.logicalKey == LogicalKeyboardKey.arrowDown || event.logicalKey == LogicalKeyboardKey.keyS) {
+        if (game.isLocalTurn && game.state != GameState.rolling && game.state != GameState.bust) {
+          int offset = (event.logicalKey == LogicalKeyboardKey.arrowLeft || event.logicalKey == LogicalKeyboardKey.keyA ||
+                        event.logicalKey == LogicalKeyboardKey.arrowUp || event.logicalKey == LogicalKeyboardKey.keyW) ? -1 : 1;
+          if (event.logicalKey == LogicalKeyboardKey.arrowLeft || event.logicalKey == LogicalKeyboardKey.keyA ||
+              event.logicalKey == LogicalKeyboardKey.arrowRight || event.logicalKey == LogicalKeyboardKey.keyD) {
+            game.moveFocusHorizontal(offset);
+          } else {
+            game.moveFocusVertical(offset);
+          }
+          if (game.isLocalAuthority) {
+            game.syncState();
+          } else {
+            networkManager.sendAction(GameAction.moveTo, value: game.currentDieIndex);
+          }
+        }
+        return true;
+      } else if (event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.space || event.logicalKey == LogicalKeyboardKey.keyE) {
+        if (game.isLocalTurn && game.state != GameState.rolling && game.state != GameState.bust) {
+          if (game.isLocalAuthority) {
+            game.toggleSelectedDie();
+            game.syncState();
+          } else {
+            game.toggleSelectedDie();
+            networkManager.sendAction(GameAction.select, value: game.currentDieIndex);
+          }
+        }
+        return true;
+      } else if (event.logicalKey == LogicalKeyboardKey.keyF) {
+        if (game.isLocalTurn && game.state != GameState.rolling && game.state != GameState.bust) {
+          if (game.isLocalAuthority) {
+            game.scoreAndContinue();
+            game.syncState();
+          } else {
+            networkManager.sendAction(GameAction.continueRoll);
+          }
+        }
+        return true;
+      } else if (event.logicalKey == LogicalKeyboardKey.keyQ) {
+        if (game.isLocalTurn && game.state != GameState.rolling && game.state != GameState.bust) {
+           if (game.isLocalAuthority) {
+             game.scoreAndEndTurn();
+             game.syncState();
+           } else {
+             networkManager.sendAction(GameAction.endTurn);
+           }
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
     final game = context.watch<Game>();
@@ -280,67 +369,6 @@ class _ContentViewState extends State<ContentView> {
     return Focus(
       focusNode: _focusNode,
       autofocus: true,
-      onKeyEvent: (node, event) {
-        if (_chatFocusNode.hasFocus || _roomFocusNode.hasFocus) return KeyEventResult.ignored;
-
-        if (event is KeyDownEvent) {
-          if (event.logicalKey == LogicalKeyboardKey.arrowLeft || event.logicalKey == LogicalKeyboardKey.keyA ||
-              event.logicalKey == LogicalKeyboardKey.arrowRight || event.logicalKey == LogicalKeyboardKey.keyD ||
-              event.logicalKey == LogicalKeyboardKey.arrowUp || event.logicalKey == LogicalKeyboardKey.keyW ||
-              event.logicalKey == LogicalKeyboardKey.arrowDown || event.logicalKey == LogicalKeyboardKey.keyS) {
-            if (game.isLocalTurn && game.state != GameState.rolling && game.state != GameState.bust) {
-              int offset = (event.logicalKey == LogicalKeyboardKey.arrowLeft || event.logicalKey == LogicalKeyboardKey.keyA ||
-                            event.logicalKey == LogicalKeyboardKey.arrowUp || event.logicalKey == LogicalKeyboardKey.keyW) ? -1 : 1;
-              if (event.logicalKey == LogicalKeyboardKey.arrowLeft || event.logicalKey == LogicalKeyboardKey.keyA ||
-                  event.logicalKey == LogicalKeyboardKey.arrowRight || event.logicalKey == LogicalKeyboardKey.keyD) {
-                game.moveFocusHorizontal(offset);
-              } else {
-                game.moveFocusVertical(offset);
-              }
-              if (game.isLocalAuthority) {
-                game.syncState();
-              } else {
-                networkManager.sendAction(GameAction.moveTo, value: game.currentDieIndex);
-              }
-            }
-            return KeyEventResult.handled;
-          } else if (event.logicalKey == LogicalKeyboardKey.enter || event.logicalKey == LogicalKeyboardKey.space || event.logicalKey == LogicalKeyboardKey.keyE) {
-            if (showChat) return KeyEventResult.ignored;
-
-            if (game.isLocalTurn && game.state != GameState.rolling && game.state != GameState.bust) {
-              if (game.isLocalAuthority) {
-                game.toggleSelectedDie();
-                game.syncState();
-              } else {
-                game.toggleSelectedDie();
-                networkManager.sendAction(GameAction.select, value: game.currentDieIndex);
-              }
-            }
-            return KeyEventResult.handled;
-          } else if (event.logicalKey == LogicalKeyboardKey.keyF) {
-            if (game.isLocalTurn && game.state != GameState.rolling && game.state != GameState.bust) {
-              if (game.isLocalAuthority) {
-                game.scoreAndContinue();
-                game.syncState();
-              } else {
-                networkManager.sendAction(GameAction.continueRoll);
-              }
-            }
-            return KeyEventResult.handled;
-          } else if (event.logicalKey == LogicalKeyboardKey.keyQ) {
-            if (game.isLocalTurn && game.state != GameState.rolling && game.state != GameState.bust) {
-               if (game.isLocalAuthority) {
-                 game.scoreAndEndTurn();
-                 game.syncState();
-               } else {
-                 networkManager.sendAction(GameAction.endTurn);
-               }
-            }
-            return KeyEventResult.handled;
-          }
-        }
-        return KeyEventResult.ignored;
-      },
       child: GestureDetector(
         onTap: () {
           // Unfocus any text fields and regain game focus
@@ -1185,7 +1213,11 @@ class _ContentViewState extends State<ContentView> {
               children: [
                 const Padding(padding: EdgeInsets.all(8.0), child: Text("Chat", style: TextStyle(color: Colors.white, fontSize: 18))),
                 const Spacer(),
-                IconButton(icon: const Icon(Icons.close, color: Colors.white), onPressed: () => setState(() => showChat = false)),
+                IconButton(icon: const Icon(Icons.close, color: Colors.white), onPressed: () {
+                  setState(() => showChat = false);
+                  _chatFocusNode.unfocus();
+                  _focusNode.requestFocus();
+                }),
               ],
             ),
             Expanded(
@@ -1247,7 +1279,11 @@ class _ContentViewState extends State<ContentView> {
                         _chatController.clear();
                         setState(() {});
                         _scrollToBottom();
-                        _chatFocusNode.requestFocus();
+                        // Re-request focus explicitly but delay to ensure the framework
+                        // does not cause a flicker if the button press caused unfocus
+                        Future.delayed(const Duration(milliseconds: 10), () {
+                          if (mounted) _chatFocusNode.requestFocus();
+                        });
                       }
                     },
                   ),
